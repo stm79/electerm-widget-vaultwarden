@@ -1,6 +1,6 @@
 {
   "name": "vaultwarden",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Passwörter für SSH-, RDP- und Telnet-Lesezeichen aus Vaultwarden/Bitwarden holen",
   "main": "main.js",
@@ -12,7 +12,7 @@
     "id": "vaultwarden",
     "name": "Vaultwarden",
     "description": "Holt Benutzer und Passwort für Lesezeichen aus Vaultwarden (über die Bitwarden-CLI „bw“). Einmal hier entsperren, dann im Lesezeichen „Passwort-Manager verwenden“ einschalten und das Passwortfeld leer lassen. Gefunden wird der Eintrag, dessen URI zum Host passt (z. B. ssh://server:22, rdp://10.0.0.5 oder nur server). Hier kannst du außerdem suchen und Verbindungen direkt öffnen.",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "type": "frontend",
     "submitLabel": "Entsperren / suchen",
     "persist": true,
@@ -63,13 +63,6 @@
         "type": "file",
         "placeholder": "bw",
         "description": "Leer: „bw“ aus dem PATH. Sonst der Pfad zu bw.exe bzw. bw."
-      },
-      {
-        "name": "rememberSession",
-        "label": "Entsperrt bleiben (auch nach Neustart)",
-        "type": "boolean",
-        "default": false,
-        "description": "Legt den Sitzungsschlüssel verschlüsselt im Schlüsselbund des Systems ab. Sonst muss nach jedem Start von electerm hier entsperrt werden."
       },
       {
         "name": "query",

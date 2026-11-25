@@ -132,47 +132,16 @@ async function status (session) {
 
 // ---------------------------------------------------------------- Sitzung
 
-async function secretAvailable () {
-  try {
-    return !!(api && api.capabilities && api.capabilities.secret && await api.secret.available())
-  } catch (e) {
-    return false
-  }
-}
-
-async function storeSession (session) {
-  if (!readSettings().rememberSession || !await secretAvailable()) return
-  fs.writeFileSync(sessionFile(), String(await api.secret.encrypt(session)))
-}
-
+/** Rest der früheren Option „Entsperrt bleiben“ (bis 0.1.0): gespeicherten Sitzungsschlüssel löschen. */
 function forgetStoredSession () {
   try {
     fs.unlinkSync(sessionFile())
   } catch (e) {}
 }
 
-async function restoreSession () {
-  if (!readSettings().rememberSession || !await secretAvailable()) return false
-  let session
-  try {
-    session = String(await api.secret.decrypt(fs.readFileSync(sessionFile(), 'utf8').trim()))
-  } catch (e) {
-    return false
-  }
-  try {
-    const st = await status(session)
-    if (st.status !== 'unlocked') return false
-    Object.assign(state, { session, server: normServer(st.serverUrl), email: String(st.userEmail || '').toLowerCase() })
-    return true
-  } catch (e) {
-    return false
-  }
-}
-
 /** Entsperrte Sitzung oder ein Fehler, den electerm einmal anzeigt (dann normale Passwortabfrage). */
 async function ensureSession () {
   if (state.session) return
-  if (await restoreSession()) return
   throw new Error('Vaultwarden ist gesperrt. Im Widget „Vaultwarden“ einmal entsperren.')
 }
 
@@ -201,10 +170,6 @@ async function unlock (cfg) {
     const st = await status().catch(() => ({}))
     if (st.status === 'unlocked') return false
     state.session = ''
-  }
-  if (await restoreSession() && state.server === server && state.email === email) {
-    await refresh(true)
-    return false
   }
   state.session = ''
   const pw = String(cfg.masterPassword || '')
@@ -239,7 +204,6 @@ async function unlock (cfg) {
   if (!state.session) throw new Error('bw hat keinen Sitzungsschlüssel geliefert.')
   state.server = server
   state.email = email
-  await storeSession(state.session)
   await refresh(true)
   return true
 }
@@ -462,8 +426,9 @@ function search (query) {
 async function run (cfg = {}) {
   try {
     const s = readSettings()
-    writeSettings({ ...s, bwPath: String(cfg.bwPath || '').trim(), rememberSession: !!cfg.rememberSession })
-    if (!cfg.rememberSession) forgetStoredSession()
+    const { rememberSession, ...rest } = s
+    writeSettings({ ...rest, bwPath: String(cfg.bwPath || '').trim() })
+    forgetStoredSession()
     const fresh = await unlock(cfg)
     if (!state.items) await refresh(true)
     const query = String(cfg.query || '').trim()

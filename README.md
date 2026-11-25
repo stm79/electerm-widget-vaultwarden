@@ -34,8 +34,6 @@ Darauf solltest du achten:
   Daten der CLI aber in `~/.electerm-vaultwarden/bw/` ab.
 - **Vollen Pfad eintragen:** Aus dem Startmenü oder als AppImage gestartet, kennt electerm oft dein PATH
   nicht. Trag im Feld „Bitwarden-CLI“ den vollen Pfad ein, z. B. `/home/<du>/.local/bin/bw`.
-- **„Entsperrt bleiben“** braucht einen laufenden Schlüsselbund, etwa GNOME Keyring oder KWallet. Unter
-  GNOME und KDE ist der normalerweise da. Ohne Schlüsselbund lässt du die Option aus.
 
 ## Installieren
 
@@ -60,9 +58,8 @@ Zur Zwei-Faktor-Anmeldung:
 
 Nach dem Entsperren zeigt das Widget, wie viele Logins es kennt.
 
-**„Entsperrt bleiben“** legt den Sitzungsschlüssel verschlüsselt im Schlüsselbund des Systems ab
-(Windows: DPAPI, Linux: GNOME Keyring/KWallet). So bleibt der Tresor auch nach einem Neustart von electerm entsperrt.
-Ohne diese Option entsperrst du nach jedem Start einmal im Widget.
+Der Sitzungsschlüssel liegt nur im Arbeitsspeicher. Nach jedem Start von electerm entsperrst du deshalb
+einmal im Widget mit dem Master-Passwort, auch wenn du den API-Schlüssel nutzt.
 
 ## Lesezeichen
 
@@ -104,7 +101,7 @@ Unter **Suche** kannst du nach Name, Benutzer oder Adresse suchen. Zu jedem Tref
 - **Passwort kopieren** legt das Passwort in die Zwischenablage. Nach 30 Sekunden wird es dort wieder gelöscht.
 - **Details** zeigt den Eintrag; das Passwort ist verdeckt.
 
-**Sperren** sperrt den Tresor und löscht den Sitzungsschlüssel, auch den im Schlüsselbund.
+**Sperren** sperrt den Tresor und löscht den Sitzungsschlüssel.
 
 ## Was wo liegt
 
@@ -113,9 +110,9 @@ Unter **Suche** kannst du nach Name, Benutzer oder Adresse suchen. Zu jedem Tref
   - Gehen nur als Umgebungsvariable an `bw`, nie als Befehlszeilenargument.
 - **`~/.electerm-vaultwarden/bw/`:** Daten der CLI (der verschlüsselte Tresor). Das ist ein eigener Ordner,
   eine sonst benutzte `bw`-Anmeldung bleibt unberührt.
-- **`~/.electerm-vaultwarden/settings.json`:** Pfad zu `bw` und die Option „Entsperrt bleiben“.
-- **`~/.electerm-vaultwarden/session.dat`:** Sitzungsschlüssel, nur mit „Entsperrt bleiben“, verschlüsselt
-  über den Schlüsselbund.
+- **`~/.electerm-vaultwarden/settings.json`:** Pfad zu `bw`.
+- **Sitzungsschlüssel:** nur im Arbeitsspeicher, nie auf der Platte. Eine `session.dat` aus Version 0.1.0
+  löscht das Widget beim nächsten Entsperren.
 - **Im Speicher von electerm:** die Liste der Einträge ohne Passwörter. Ein Passwort holt das Widget erst,
   wenn eine Verbindung es braucht.
 - **Verbindungsverlauf:** Verbindungen, die das Widget öffnet, landen nicht darin. Das regelt electerm selbst.

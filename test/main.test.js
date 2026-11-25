@@ -15,15 +15,8 @@ const items = require('./items.json').filter(i => i.type === 1).map(it => ({
 
 let dir
 const clipboard = { text: '' }
-const secretStore = { ok: true }
 w._test.setApi({
   log () {},
-  capabilities: { secret: true },
-  secret: {
-    available: async () => secretStore.ok,
-    encrypt: async t => Buffer.from('enc:' + t).toString('base64'),
-    decrypt: async d => Buffer.from(d, 'base64').toString().replace(/^enc:/, '')
-  },
   clipboard: { write: async t => { clipboard.text = t }, read: async () => clipboard.text }
 })
 
@@ -127,18 +120,16 @@ test('Anmelden mit 2FA, Lesezeichen bedienen, speichern, sperren', async () => {
   assert.equal(r.messageType, 'success', r.message)
 })
 
-test('API-Schlüssel und „entsperrt bleiben“ über einen Neustart', async () => {
-  let r = await w.run(cfg({ masterPassword: 'master', clientId: 'user.x', clientSecret: 'geheim', rememberSession: true }))
-  assert.equal(r.messageType, 'success', r.message)
-  assert.ok(fs.existsSync(path.join(dir, 'session.dat')))
-  assert.ok(!fs.readFileSync(path.join(dir, 'session.dat'), 'utf8').includes('sess-123'))
-  // „Neustart“: Speicher leer, Sitzung kommt aus dem Schlüsselbund
-  Object.assign(state, { session: '', items: null, syncedAt: 0 })
-  assert.deepEqual(await w.getCredentials({ type: 'rdp', host: '10.0.0.5', port: 3389 }), { pick: { login: 'admin', password: 'pw-rdp' } })
-  // ausschalten löscht die gespeicherte Sitzung
-  r = await w.run(cfg({ rememberSession: false }))
+test('API-Schlüssel; alte session.dat wird gelöscht, nach Neustart gesperrt', async () => {
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, 'session.dat'), 'alt')
+  const r = await w.run(cfg({ masterPassword: 'master', clientId: 'user.x', clientSecret: 'geheim' }))
   assert.equal(r.messageType, 'success', r.message)
   assert.ok(!fs.existsSync(path.join(dir, 'session.dat')))
+  assert.deepEqual(await w.getCredentials({ type: 'rdp', host: '10.0.0.5', port: 3389 }), { pick: { login: 'admin', password: 'pw-rdp' } })
+  // „Neustart“: Speicher leer → gesperrt
+  Object.assign(state, { session: '', items: null, syncedAt: 0 })
+  await assert.rejects(w.getCredentials({ type: 'rdp', host: '10.0.0.5', port: 3389 }), /gesperrt/)
 })
 
 test('anderes Konto: abmelden und neu anmelden', async () => {
