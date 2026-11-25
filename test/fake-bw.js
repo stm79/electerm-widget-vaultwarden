@@ -6,6 +6,12 @@ const path = require('node:path')
 const dir = process.env.BITWARDENCLI_APPDATA_DIR
 fs.mkdirSync(dir, { recursive: true })
 const file = path.join(dir, 'fake.json')
+for (const k of ['BW_PASSWORD', 'BW_CLIENTSECRET']) {
+  if (process.env[k] && !['login', 'unlock'].includes(process.argv[2])) {
+    process.stderr.write(k + ' an ' + process.argv[2] + ' weitergereicht\n')
+    process.exit(1)
+  }
+}
 const st = fs.existsSync(file)
   ? JSON.parse(fs.readFileSync(file, 'utf8'))
   : { server: null, email: null, status: 'unauthenticated', items: require('./items.json'), calls: [] }
@@ -70,7 +76,8 @@ switch (cmd) {
   }
   case 'create': {
     needSession()
-    const it = { ...JSON.parse(Buffer.from(a2, 'base64').toString('utf8')), id: 'new-' + st.items.length }
+    if (a2) fail('Eintrag als Argument statt über stdin')
+    const it = { ...JSON.parse(Buffer.from(fs.readFileSync(0, 'utf8'), 'base64').toString('utf8')), id: 'new-' + st.items.length }
     st.items.push(it)
     out(it)
     break
@@ -79,7 +86,8 @@ switch (cmd) {
     needSession()
     const i = st.items.findIndex(x => x.id === a2)
     if (i < 0) fail('Not found.')
-    st.items[i] = JSON.parse(Buffer.from(a3, 'base64').toString('utf8'))
+    if (a3) fail('Eintrag als Argument statt über stdin')
+    st.items[i] = JSON.parse(Buffer.from(fs.readFileSync(0, 'utf8'), 'base64').toString('utf8'))
     out(st.items[i])
     break
   }

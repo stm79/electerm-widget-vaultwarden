@@ -1,6 +1,6 @@
 {
   "name": "vaultwarden",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Passwörter für SSH-, RDP- und Telnet-Lesezeichen aus Vaultwarden/Bitwarden holen",
   "main": "main.js",
@@ -12,7 +12,7 @@
     "id": "vaultwarden",
     "name": "Vaultwarden",
     "description": "Holt Benutzer und Passwort für Lesezeichen aus Vaultwarden (über die Bitwarden-CLI „bw“). Einmal hier entsperren, dann im Lesezeichen „Passwort-Manager verwenden“ einschalten und das Passwortfeld leer lassen. Gefunden wird der Eintrag, dessen URI zum Host passt (z. B. ssh://server:22, rdp://10.0.0.5 oder nur server). Hier kannst du außerdem suchen und Verbindungen direkt öffnen.",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "type": "frontend",
     "submitLabel": "Entsperren / suchen",
     "persist": true,
@@ -38,12 +38,19 @@
         "name": "masterPassword",
         "label": "Master-Passwort",
         "type": "password",
-        "description": "Nur zum Anmelden und Entsperren. Wird nicht gespeichert."
+        "description": "Nur zum Anmelden und Entsperren. Wird nicht gespeichert. Nach dem Entsperren das Feld leeren, sonst bleibt es im offenen Panel stehen."
+      },
+      {
+        "name": "autoLockMinutes",
+        "label": "Automatisch sperren nach (Minuten)",
+        "type": "number",
+        "default": 30,
+        "description": "Ohne Benutzung (Lesezeichen verbinden, Suche, Kopieren) sperrt sich der Tresor nach dieser Zeit. Nach Ruhezustand und beim Beenden von electerm immer. 0 = nur diese beiden."
       },
       {
         "name": "twoFactorCode",
         "label": "Zwei-Faktor-Code",
-        "type": "string",
+        "type": "password",
         "description": "Nur bei der ersten Anmeldung nötig, wenn das Konto 2FA (Authenticator-App) hat."
       },
       {

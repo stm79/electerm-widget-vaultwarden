@@ -6,12 +6,14 @@
  *   beim Verbinden eines Lesezeichens mit „Passwort-Manager verwenden“ und ohne eigenes Passwort.
  *
  * Die CLI bekommt einen eigenen Datenordner (~/.electerm-vaultwarden/bw), damit sie einer
- * sonst benutzten bw-Anmeldung nicht in die Quere kommt. Das Master-Passwort geht nur per
- * Umgebungsvariable an `bw` und wird nirgends gespeichert. Im Speicher bleibt die Liste der
+ * sonst benutzten bw-Anmeldung nicht in die Quere kommt (Rechte 0700). Das Master-Passwort geht
+ * nur per Umgebungsvariable an `bw` und wird nirgends gespeichert; Einträge mit Passwort gehen
+ * per stdin an `bw`, nie als Argument. Der Tresor sperrt sich nach Inaktivität, nach dem
+ * Ruhezustand und beim Beenden. Im Speicher bleibt die Liste der
  * Einträge ohne Passwörter; ein Passwort wird erst geholt, wenn es gebraucht wird.
  */
 
-const { execFile } = require('node:child_process')
+const { spawn } = require('node:child_process')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
@@ -28,6 +30,17 @@ const SYNC_MS = 10 * 60 * 1000
 /** Kopiertes Passwort nach dieser Zeit aus der Zwischenablage entfernen. */
 const CLIPBOARD_CLEAR_MS = 30 * 1000
 const DEFAULT_PORTS = { ssh: 22, telnet: 23, ftp: 21, rdp: 3389, vnc: 5900, spice: 5900 }
+/** Protokolle ohne Verschlüsselung: Passwort nur bei URI mit genau diesem Schema automatisch. */
+const PLAIN = ['telnet', 'ftp']
+/** Standard für die automatische Sperre nach Inaktivität (Minuten). */
+const DEFAULT_AUTOLOCK_MIN = 30
+const MAX_AUTOLOCK_MIN = 24 * 60
+/** So oft prüfen, ob gesperrt werden muss. */
+const TICK_MS = 60 * 1000
+/** Lücke zwischen zwei Prüfungen, ab der der Rechner geschlafen hat → sperren. */
+const SLEEP_GAP_MS = 3 * 60 * 1000
+const BW_TIMEOUT_MS = 120000
+const BW_MAX_OUTPUT = 256 * 1024 * 1024
 
 const state = {
   session: '',
@@ -36,7 +49,19 @@ const state = {
   syncedAt: 0,
   server: '',
   email: '',
-  refreshing: null
+  refreshing: null,
+  /** letzte Benutzung (Entsperren, Lesezeichen, Panel) für die automatische Sperre */
+  lastUsed: 0,
+  lastTick: 0,
+  /** 0 = keine automatische Sperre */
+  autoLockMs: null,
+  /** warum zuletzt automatisch gesperrt wurde (für die Fehlermeldung) */
+  lockReason: '',
+  /** vom Widget kopiertes Passwort, solange es in der Zwischenablage stehen könnte */
+  clipboardPw: '',
+  watcher: null,
+  /** `bw lock` beim Laden: Entsperren wartet darauf */
+  startup: null
 }
 
 function appDir () {
@@ -55,8 +80,27 @@ function readSettings () {
 }
 
 function writeSettings (s) {
-  fs.mkdirSync(appDir(), { recursive: true })
-  fs.writeFileSync(settingsFile(), JSON.stringify(s, null, 2))
+  ensureAppDir()
+  fs.writeFileSync(settingsFile(), JSON.stringify(s, null, 2), { mode: 0o600 })
+}
+
+/**
+ * Datenordner nur für den eigenen Benutzer: darin liegt der verschlüsselte Tresor der CLI,
+ * an dem sich sonst andere lokale Benutzer offline am Master-Passwort versuchen könnten.
+ * Unter Windows schützt das Benutzerprofil den Ordner bereits.
+ */
+function ensureAppDir () {
+  const dir = appDir()
+  const bwDir = path.join(dir, 'bw')
+  fs.mkdirSync(bwDir, { recursive: true, mode: 0o700 })
+  if (process.platform === 'win32') return
+  fs.chmodSync(dir, 0o700)
+  fs.chmodSync(bwDir, 0o700)
+  for (const d of [dir, bwDir]) {
+    for (const f of fs.readdirSync(d, { withFileTypes: true })) {
+      if (f.isFile()) fs.chmodSync(path.join(d, f.name), 0o600)
+    }
+  }
 }
 
 // ---------------------------------------------------------------- bw aufrufen
@@ -81,10 +125,22 @@ function cleanError (text) {
 /** Sitzungsschlüssel aus `--raw`: die letzte Zeile (davor kann ein Hinweis stehen). */
 const lastLine = out => out.split(/\r?\n/).map(l => l.trim()).filter(Boolean).pop() || ''
 
+const notFound = file => `Bitwarden-CLI nicht gefunden (${file}). Installieren (Windows: „winget install Bitwarden.CLI“) oder im Feld „Bitwarden-CLI“ den Pfad angeben.`
+
+function bwEnv (session) {
+  const env = { ...process.env, BITWARDENCLI_APPDATA_DIR: path.join(appDir(), 'bw'), BW_NOINTERACTION: 'true' }
+  // Geheimnisse aus der Umgebung von electerm nicht ungefragt weiterreichen
+  for (const k of ['BW_SESSION', 'BW_PASSWORD', 'BW_CLIENTID', 'BW_CLIENTSECRET']) delete env[k]
+  if (session) env.BW_SESSION = session
+  return env
+}
+
 /**
- * `bw` ausführen; liefert stdout. Geheimnisse nur über `env`, nie als Argument.
+ * `bw` ausführen; liefert stdout. Geheimnisse nur über `env` oder stdin (`input`), nie als
+ * Argument: die Befehlszeile eines Prozesses können andere Prozesse (unter Linux sogar andere
+ * Benutzer) mitlesen. Fehlermeldungen enthalten deshalb auch nie die Argumente.
  * @param {string[]} args
- * @param {{ session?: string, env?: object }} [opts]
+ * @param {{ session?: string, env?: object, input?: string }} [opts]
  */
 function bw (args, opts = {}) {
   const file = bwFile()
@@ -93,26 +149,54 @@ function bw (args, opts = {}) {
   if (shell && args.some(a => !/^[\w@.:/+=%-]*$/.test(a))) {
     return Promise.reject(new Error('Ungültiges Zeichen für den Aufruf von bw.cmd. Besser bw.exe verwenden.'))
   }
-  const env = { ...process.env, BITWARDENCLI_APPDATA_DIR: path.join(appDir(), 'bw'), BW_NOINTERACTION: 'true', ...opts.env }
-  delete env.BW_SESSION
-  const session = opts.session === undefined ? state.session : opts.session
-  if (session) env.BW_SESSION = session
+  try {
+    ensureAppDir()
+  } catch (e) {
+    return Promise.reject(new Error(`Datenordner ${appDir()} nicht nutzbar: ${e.code || e.message}`))
+  }
+  const env = { ...bwEnv(opts.session === undefined ? state.session : opts.session), ...opts.env }
   return new Promise((resolve, reject) => {
-    execFile(shell ? `"${file}"` : file, [...args, '--nointeraction'], {
-      env,
-      shell,
-      timeout: 120000,
-      maxBuffer: 256 * 1024 * 1024,
-      windowsHide: true
-    }, (err, stdout, stderr) => {
-      if (err) {
-        if (err.code === 'ENOENT') {
-          return reject(new Error(`Bitwarden-CLI nicht gefunden (${file}). Installieren (Windows: „winget install Bitwarden.CLI“) oder im Feld „Bitwarden-CLI“ den Pfad angeben.`))
-        }
-        return reject(new Error(cleanError(stderr) || cleanError(stdout) || err.message))
+    let done = false
+    let size = 0
+    const out = []
+    const err = []
+    let child
+    const finish = (e, value) => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      if (e) reject(e)
+      else resolve(value)
+    }
+    const timer = setTimeout(() => {
+      if (child) child.kill()
+      finish(new Error(`bw ${args[0]}: keine Antwort nach ${BW_TIMEOUT_MS / 1000} s.`))
+    }, BW_TIMEOUT_MS)
+    try {
+      child = spawn(shell ? `"${file}"` : file, [...args, '--nointeraction'], { env, shell, windowsHide: true })
+    } catch (e) {
+      return finish(new Error(e.code === 'ENOENT' ? notFound(file) : `bw konnte nicht gestartet werden: ${e.code || e.message}`))
+    }
+    const collect = list => chunk => {
+      size += chunk.length
+      if (size > BW_MAX_OUTPUT) {
+        child.kill()
+        finish(new Error('Antwort von bw ist zu groß.'))
+      } else {
+        list.push(chunk)
       }
-      resolve(String(stdout).trim())
+    }
+    child.stdout.on('data', collect(out))
+    child.stderr.on('data', collect(err))
+    child.on('error', e => finish(new Error(e.code === 'ENOENT' ? notFound(file) : `bw konnte nicht gestartet werden: ${e.code || e.message}`)))
+    child.on('close', code => {
+      const stdout = Buffer.concat(out).toString('utf8')
+      const stderr = Buffer.concat(err).toString('utf8')
+      if (code === 0) return finish(null, stdout.trim())
+      finish(new Error(cleanError(stderr) || cleanError(stdout) || `bw ${args[0]} ist fehlgeschlagen (Code ${code}).`))
     })
+    child.stdin.on('error', () => {})
+    child.stdin.end(opts.input || '')
   })
 }
 
@@ -141,8 +225,61 @@ function forgetStoredSession () {
 
 /** Entsperrte Sitzung oder ein Fehler, den electerm einmal anzeigt (dann normale Passwortabfrage). */
 async function ensureSession () {
-  if (state.session) return
-  throw new Error('Vaultwarden ist gesperrt. Im Widget „Vaultwarden“ einmal entsperren.')
+  if (state.session) {
+    touch()
+    return
+  }
+  const why = state.lockReason ? ` (automatisch gesperrt: ${state.lockReason})` : ''
+  throw new Error(`Vaultwarden ist gesperrt${why}. Im Widget „Vaultwarden“ wieder entsperren.`)
+}
+
+// ---------------------------------------------------------------- automatische Sperre
+
+function autoLockMs () {
+  if (state.autoLockMs === null) state.autoLockMs = parseAutoLock(readSettings().autoLockMinutes)
+  return state.autoLockMs
+}
+
+/** Minuten aus dem Formular → ms. Leer/ungültig: Standard; 0: aus. */
+function parseAutoLock (value) {
+  if (value === undefined || value === null || value === '') return DEFAULT_AUTOLOCK_MIN * 60000
+  const m = Number(value)
+  if (!Number.isFinite(m) || m < 0) return DEFAULT_AUTOLOCK_MIN * 60000
+  return Math.min(m, MAX_AUTOLOCK_MIN) * 60000
+}
+
+/** Benutzung merken und die Überwachung laufen lassen. */
+function touch () {
+  state.lastUsed = Date.now()
+  if (!state.watcher) {
+    state.lastTick = Date.now()
+    state.watcher = setInterval(() => { tick().catch(() => {}) }, TICK_MS)
+    if (state.watcher.unref) state.watcher.unref()
+  }
+}
+
+function stopWatch () {
+  if (state.watcher) clearInterval(state.watcher)
+  state.watcher = null
+}
+
+/**
+ * Sperrt nach Inaktivität und nach dem Ruhezustand. Den Ruhezustand erkennt das Widget an
+ * einer Lücke zwischen zwei Prüfungen (Timer laufen im Schlaf nicht weiter); Electrons
+ * powerMonitor steht Widgets nicht zur Verfügung.
+ */
+async function tick (now = Date.now()) {
+  if (!state.session) return stopWatch()
+  const gap = now - (state.lastTick || now)
+  state.lastTick = now
+  const limit = autoLockMs()
+  let reason = ''
+  if (gap > SLEEP_GAP_MS) reason = 'nach Ruhezustand oder Bildschirmsperre'
+  else if (limit > 0 && now - state.lastUsed >= limit) reason = `nach ${Math.round(limit / 60000)} min ohne Benutzung`
+  if (!reason) return
+  await lock()
+  state.lockReason = reason
+  if (api) api.log('info', 'Vaultwarden automatisch gesperrt: ' + reason)
 }
 
 function hint (e) {
@@ -164,7 +301,8 @@ async function unlock (cfg) {
   const server = normServer(cfg.serverUrl)
   const email = String(cfg.email || '').trim().toLowerCase()
   if (!server || !email) throw new Error('Server und E-Mail angeben.')
-  if (!/^https?:\/\//.test(server)) throw new Error('Server bitte mit https:// angeben.')
+  checkServer(server)
+  if (state.startup) await state.startup
 
   if (state.session && state.server === server && state.email === email) {
     const st = await status().catch(() => ({}))
@@ -204,14 +342,43 @@ async function unlock (cfg) {
   if (!state.session) throw new Error('bw hat keinen Sitzungsschlüssel geliefert.')
   state.server = server
   state.email = email
+  state.lockReason = ''
+  touch()
   await refresh(true)
   return true
 }
 
+/** Nur https://. Unverschlüsselt höchstens zu einem Server auf diesem Rechner. */
+function checkServer (server) {
+  let u
+  try {
+    u = new URL(server)
+  } catch (e) {
+    throw new Error('Server-Adresse ungültig.')
+  }
+  if (u.username || u.password) throw new Error('Server-Adresse bitte ohne Benutzer/Passwort angeben.')
+  if (u.protocol === 'https:') return
+  if (u.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname)) return
+  throw new Error('Server bitte mit https:// angeben. Unverschlüsseltes http:// ist nur für localhost erlaubt.')
+}
+
 async function lock () {
-  await bw(['lock']).catch(() => {})
-  Object.assign(state, { session: '', items: null, syncedAt: 0 })
+  const session = state.session
+  Object.assign(state, { session: '', items: null, syncedAt: 0, lockReason: '' })
+  stopWatch()
+  await clearClipboard()
+  await bw(['lock'], { session }).catch(() => {})
   forgetStoredSession()
+}
+
+/** Vom Widget kopiertes Passwort aus der Zwischenablage nehmen, falls es noch drin steht. */
+async function clearClipboard () {
+  const pw = state.clipboardPw
+  state.clipboardPw = ''
+  if (!pw || !api) return
+  try {
+    if (await api.clipboard.read() === pw) await api.clipboard.write('')
+  } catch (e) {}
 }
 
 // ---------------------------------------------------------------- Einträge
@@ -279,6 +446,7 @@ function matchItems (items, target) {
   const host = String(target.host || '').trim().toLowerCase()
   const type = String(target.type || 'ssh').toLowerCase()
   const port = Number(target.port) || DEFAULT_PORTS[type] || 0
+  const plain = PLAIN.includes(type)
   const title = String(target.title || '').trim().toLowerCase()
   const entries = []
   const alternatives = []
@@ -288,8 +456,12 @@ function matchItems (items, target) {
     for (const raw of it.uris) {
       const u = parseUri(raw)
       if (!u || u.host !== host) continue
-      if (u.scheme === '' || u.scheme === type) {
-        if (!u.port || u.port === port) exact = true
+      const portOk = !u.port || u.port === port
+      if (u.scheme === type || (u.scheme === '' && !plain)) {
+        if (portOk) exact = true
+      } else if (u.scheme === '' && portOk) {
+        // unverschlüsseltes Protokoll, URI ohne Schema: nur zur Auswahl, nie automatisch
+        near = true
       } else if (WEB.includes(u.scheme)) {
         near = true
       }
@@ -354,9 +526,9 @@ async function saveCredentials ({ target = {}, login = '', password = '', uuid =
     const it = await getItem(uuid)
     it.login = { ...(it.login || {}), password }
     if (login) it.login.username = login
-    await bw(['edit', 'item', uuid, b64(it)])
+    await bw(['edit', 'item', uuid], { input: b64(it) })
   } else {
-    await bw(['create', 'item', b64({
+    await bw(['create', 'item'], { input: b64({
       type: 1,
       name: target.title || `${login ? login + '@' : ''}${target.host}`,
       notes: 'Angelegt von electerm',
@@ -366,7 +538,7 @@ async function saveCredentials ({ target = {}, login = '', password = '', uuid =
       reprompt: 0,
       fields: [],
       login: { username: login, password, totp: null, uris: [{ match: null, uri: url }] }
-    })])
+    }) })
   }
   state.syncedAt = 0
   await refresh(true).catch(() => {})
@@ -387,8 +559,10 @@ const actionButtons = () => [
 function statusResult (prefix = '') {
   const n = state.items ? state.items.length : 0
   const when = state.syncedAt ? new Date(state.syncedAt).toLocaleTimeString('de-DE') : 'noch nie'
+  const ms = autoLockMs()
+  const auto = ms > 0 ? `Sperrt sich nach ${Math.round(ms / 60000)} min ohne Benutzung.` : 'Automatische Sperre aus.'
   return {
-    message: `${prefix}Entsperrt: ${state.email} auf ${state.server}. ${n} Logins, abgeglichen ${when}.`,
+    message: `${prefix}Entsperrt: ${state.email} auf ${state.server}. ${n} Logins, abgeglichen ${when}. ${auto} Das Feld „Master-Passwort“ kannst du jetzt leeren.`,
     messageType: 'success',
     buttons: actionButtons()
   }
@@ -427,7 +601,8 @@ async function run (cfg = {}) {
   try {
     const s = readSettings()
     const { rememberSession, ...rest } = s
-    writeSettings({ ...rest, bwPath: String(cfg.bwPath || '').trim() })
+    state.autoLockMs = parseAutoLock(cfg.autoLockMinutes)
+    writeSettings({ ...rest, bwPath: String(cfg.bwPath || '').trim(), autoLockMinutes: state.autoLockMs / 60000 })
     forgetStoredSession()
     const fresh = await unlock(cfg)
     if (!state.items) await refresh(true)
@@ -483,10 +658,9 @@ async function copyPassword (row) {
     const pw = (it.login && it.login.password) || ''
     if (!pw) return { message: 'Der Eintrag hat kein Passwort.', messageType: 'warning' }
     await api.clipboard.write(pw)
+    state.clipboardPw = pw
     setTimeout(async () => {
-      try {
-        if (await api.clipboard.read() === pw) await api.clipboard.write('')
-      } catch (e) {}
+      if (state.clipboardPw === pw) await clearClipboard()
     }, CLIPBOARD_CLEAR_MS).unref?.()
     return { message: `Passwort von „${it.name}“ kopiert, wird in 30 s aus der Zwischenablage entfernt.`, messageType: 'success' }
   } catch (e) {
@@ -503,13 +677,49 @@ async function details (row) {
       details: [
         { label: 'Name', value: it.name || '', copy: true },
         { label: 'Benutzer', value: login.username || '', copy: true },
-        { label: 'Passwort', value: login.password || '', secret: true, copy: true },
+        // das Passwort selbst bleibt im Tresor; zum Kopieren gibt es den eigenen Knopf
+        { label: 'Passwort', value: login.password ? 'gespeichert („Passwort kopieren“ benutzen)' : 'keins' },
         ...(login.uris || []).map((u, i) => ({ label: `URI ${i + 1}`, value: u.uri || '', copy: true }))
       ]
     }
   } catch (e) {
     return failure(e)
   }
+}
+
+// ---------------------------------------------------------------- Start und Ende
+
+/**
+ * Beim Laden: einen Tresor sperren, den eine frühere Sitzung offen gelassen hat (Absturz,
+ * electerm hart beendet). Sonst bliebe der mit dem Sitzungsschlüssel geschützte Schlüssel
+ * auf der Platte gültig.
+ */
+function lockStale () {
+  if (!fs.existsSync(path.join(appDir(), 'bw'))) return Promise.resolve()
+  state.startup = bw(['lock'], { session: '' }).catch(() => {}).finally(() => { state.startup = null })
+  return state.startup
+}
+
+/** Beim Beenden: Zwischenablage leeren und `bw lock` im Hintergrund (läuft nach electerm weiter). */
+function onExit () {
+  if (state.clipboardPw && api) {
+    try {
+      if (api.clipboard.read() === state.clipboardPw) api.clipboard.write('')
+    } catch (e) {}
+  }
+  if (!state.session) return
+  try {
+    const file = bwFile()
+    const shell = process.platform === 'win32' && /\.(cmd|bat)$/i.test(file)
+    spawn(shell ? `"${file}"` : file, ['lock', '--nointeraction'], {
+      env: bwEnv(state.session), shell, detached: true, stdio: 'ignore', windowsHide: true
+    }).unref()
+  } catch (e) {}
+}
+
+if (api) {
+  lockStale()
+  process.on('exit', onExit)
 }
 
 module.exports = {
@@ -523,5 +733,5 @@ module.exports = {
   getCredentials,
   saveCredentials,
   // für Tests
-  _test: { state, parseUri, matchItems, decide, buildTab, setApi: a => { api = a } }
+  _test: { state, parseUri, matchItems, decide, buildTab, tick, lockStale, checkServer, parseAutoLock, setApi: a => { api = a } }
 }

@@ -46,7 +46,11 @@ Für ein Update: erneut importieren und das Überschreiben bestätigen.
 
 1. Widget **Vaultwarden** öffnen.
 2. Server (z. B. `https://vault.example.com`), E-Mail und Master-Passwort eintragen.
+   Der Server muss mit `https://` angegeben werden. Unverschlüsseltes `http://` nimmt das Widget nur für
+   `localhost` an.
 3. **Entsperren / suchen** drücken.
+4. Das Feld „Master-Passwort“ danach leeren. electerm speichert es zwar nicht, lässt es aber im offenen
+   Panel stehen und schickt es bei jedem Knopfdruck an das Widget mit.
 
 Zur Zwei-Faktor-Anmeldung:
 
@@ -60,6 +64,21 @@ Nach dem Entsperren zeigt das Widget, wie viele Logins es kennt.
 
 Der Sitzungsschlüssel liegt nur im Arbeitsspeicher. Nach jedem Start von electerm entsperrst du deshalb
 einmal im Widget mit dem Master-Passwort, auch wenn du den API-Schlüssel nutzt.
+
+## Automatische Sperre
+
+Der Tresor sperrt sich von selbst:
+
+- **Nach Inaktivität:** standardmäßig nach 30 Minuten, in denen das Widget nicht benutzt wurde (kein
+  Lesezeichen verbunden, keine Suche, nichts kopiert). Einstellbar im Feld „Automatisch sperren nach“,
+  `0` schaltet nur diese Sperre ab.
+- **Nach Ruhezustand:** Das Widget merkt am Zeitsprung, dass der Rechner geschlafen hat, und sperrt beim
+  Aufwachen.
+- **Beim Beenden von electerm:** `bw lock` läuft im Hintergrund. Ist electerm abgestürzt, sperrt das Widget
+  beim nächsten Start.
+
+Beim Sperren wird auch ein kopiertes Passwort aus der Zwischenablage entfernt. Danach fragt electerm bei
+Lesezeichen wieder normal nach dem Passwort, bis du im Widget entsperrst.
 
 ## Lesezeichen
 
@@ -76,6 +95,10 @@ Beim Verbinden sucht das Widget den passenden Eintrag über die **URI** des Eint
 | `server:2222` | jedes Protokoll auf `server`, Port 2222 |
 | `server` | jedes Protokoll auf `server` |
 | `rdp://10.0.0.5` | RDP auf `10.0.0.5` |
+
+Ausnahme: **Telnet und FTP** übertragen das Passwort unverschlüsselt. Dorthin gibt das Widget ein Passwort
+nur automatisch, wenn die URI genau dieses Schema hat (`telnet://server`). Einträge mit `server` oder
+`server:23` bietet es nur zur Auswahl an.
 
 So entscheidet das Widget:
 
@@ -98,19 +121,24 @@ beim Klick auf „Synchronisieren“ sofort. Ohne Netz arbeitet es mit der lokal
 Unter **Suche** kannst du nach Name, Benutzer oder Adresse suchen. Zu jedem Treffer:
 
 - **SSH** / **RDP** öffnet die Verbindung direkt.
-- **Passwort kopieren** legt das Passwort in die Zwischenablage. Nach 30 Sekunden wird es dort wieder gelöscht.
-- **Details** zeigt den Eintrag; das Passwort ist verdeckt.
+- **Passwort kopieren** legt das Passwort in die Zwischenablage. Nach 30 Sekunden, beim Sperren und beim
+  Beenden wird es dort wieder gelöscht. Unter Windows landet es trotzdem im Zwischenablage-Verlauf (Win+V),
+  falls du den eingeschaltet hast. Ein Widget kann das nicht verhindern.
+- **Details** zeigt Name, Benutzer und URIs, nur ob ein Passwort gespeichert ist, nicht das Passwort selbst.
 
 **Sperren** sperrt den Tresor und löscht den Sitzungsschlüssel.
 
 ## Was wo liegt
 
-- **Master-Passwort und `client_secret`:**
-  - Werden nie gespeichert.
+- **Master-Passwort, `client_secret` und Zwei-Faktor-Code:**
+  - Werden nie gespeichert, weder vom Widget noch von electerm (Passwortfelder merkt sich electerm nicht).
   - Gehen nur als Umgebungsvariable an `bw`, nie als Befehlszeilenargument.
+- **Passwörter, die electerm speichert oder aktualisiert:** gehen über stdin an `bw`, nie als
+  Befehlszeilenargument. Die Befehlszeile eines Prozesses können andere Programme mitlesen.
 - **`~/.electerm-vaultwarden/bw/`:** Daten der CLI (der verschlüsselte Tresor). Das ist ein eigener Ordner,
-  eine sonst benutzte `bw`-Anmeldung bleibt unberührt.
-- **`~/.electerm-vaultwarden/settings.json`:** Pfad zu `bw`.
+  eine sonst benutzte `bw`-Anmeldung bleibt unberührt. Unter Linux und macOS setzt das Widget die Rechte
+  bei jedem Aufruf auf `0700` bzw. `0600`, damit andere Benutzer den Tresor nicht kopieren können.
+- **`~/.electerm-vaultwarden/settings.json`:** Pfad zu `bw` und die Zeit für die automatische Sperre.
 - **Sitzungsschlüssel:** nur im Arbeitsspeicher, nie auf der Platte. Eine `session.dat` aus Version 0.1.0
   löscht das Widget beim nächsten Entsperren.
 - **Im Speicher von electerm:** die Liste der Einträge ohne Passwörter. Ein Passwort holt das Widget erst,
