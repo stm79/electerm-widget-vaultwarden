@@ -1,0 +1,9 @@
+[
+  { "id": "a1", "type": 1, "name": "Webserver", "login": { "username": "root", "password": "pw-root", "uris": [{ "uri": "ssh://web.lan:22" }] } },
+  { "id": "a2", "type": 1, "name": "Webserver deploy", "login": { "username": "deploy", "password": "pw-deploy", "uris": [{ "uri": "web.lan" }] } },
+  { "id": "b1", "type": 1, "name": "Terminalserver", "login": { "username": "admin", "password": "pw-rdp", "uris": [{ "uri": "rdp://10.0.0.5" }] } },
+  { "id": "c1", "type": 1, "name": "NAS", "login": { "username": "admin", "password": "pw-nas-web", "uris": [{ "uri": "https://nas.lan:5001" }] } },
+  { "id": "d1", "type": 1, "name": "router", "login": { "username": "ubnt", "password": "pw-router", "uris": [] } },
+  { "id": "e1", "type": 1, "name": "Pi", "login": { "username": "pi", "password": "pw-pi", "uris": [{ "uri": "pi.lan:2222" }] } },
+  { "id": "n1", "type": 2, "name": "Notiz", "notes": "keine Zugangsdaten" }
+]
