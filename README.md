@@ -16,8 +16,10 @@ Die übernimmt Anmeldung, Verschlüsselung und Abgleich.
 
 ## Installieren
 
-electerm → Einstellungen → Widgets → **Ordner importieren** → diesen Ordner wählen.
-Nach Änderungen am Code: erneut importieren und das Überschreiben bestätigen.
+electerm (ab 5.9) → Widgets → **Importieren** → `stm79/electerm-widget-vaultwarden` eingeben.
+
+Alternativ einen lokalen Ordner mit diesem Inhalt importieren.
+Für ein Update: erneut importieren und das Überschreiben bestätigen.
 
 ## Einrichten
 
