@@ -11,8 +11,31 @@ Die übernimmt Anmeldung, Verschlüsselung und Abgleich.
 - **electerm 5.9 oder neuer.** Ab dieser Version gibt es die Passwort-Manager-Schnittstelle für Widgets.
 - **Bitwarden-CLI `bw`:**
   - Windows: `winget install Bitwarden.CLI`, danach electerm neu starten, damit `bw` im PATH ist.
-  - Linux: `snap install bw`, oder die Datei von <https://bitwarden.com/help/cli/> herunterladen.
+  - Linux: die einzelne Datei herunterladen, nicht das Snap-Paket (siehe unten).
   - Liegt `bw` woanders, gibst du den Pfad im Feld „Bitwarden-CLI“ an.
+
+### Linux
+
+`bw` installieren:
+
+```
+cd /tmp
+curl -L -o bw.zip "https://vault.bitwarden.com/download/?app=cli&platform=linux"
+unzip bw.zip && chmod +x bw
+mkdir -p ~/.local/bin && mv bw ~/.local/bin/
+~/.local/bin/bw --version
+```
+
+Alternativ: `npm install -g @bitwarden/cli`.
+
+Darauf solltest du achten:
+
+- **Kein Snap:** Snap-Programme dürfen nicht in versteckte Ordner im Home schreiben. Das Widget legt die
+  Daten der CLI aber in `~/.electerm-vaultwarden/bw/` ab.
+- **Vollen Pfad eintragen:** Aus dem Startmenü oder als AppImage gestartet, kennt electerm oft dein PATH
+  nicht. Trag im Feld „Bitwarden-CLI“ den vollen Pfad ein, z. B. `/home/<du>/.local/bin/bw`.
+- **„Entsperrt bleiben“** braucht einen laufenden Schlüsselbund, etwa GNOME Keyring oder KWallet. Unter
+  GNOME und KDE ist der normalerweise da. Ohne Schlüsselbund lässt du die Option aus.
 
 ## Installieren
 
@@ -38,7 +61,7 @@ Zur Zwei-Faktor-Anmeldung:
 Nach dem Entsperren zeigt das Widget, wie viele Logins es kennt.
 
 **„Entsperrt bleiben“** legt den Sitzungsschlüssel verschlüsselt im Schlüsselbund des Systems ab
-(Windows: DPAPI). So bleibt der Tresor auch nach einem Neustart von electerm entsperrt.
+(Windows: DPAPI, Linux: GNOME Keyring/KWallet). So bleibt der Tresor auch nach einem Neustart von electerm entsperrt.
 Ohne diese Option entsperrst du nach jedem Start einmal im Widget.
 
 ## Lesezeichen
